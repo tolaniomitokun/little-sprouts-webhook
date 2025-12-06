@@ -3,7 +3,7 @@ const app = express();
 app.use(express.json());
 
 // Port configuration
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 // ============================================
 // MOCK DATA - Little Sprouts Pediatrics
@@ -39,12 +39,11 @@ function handleCheckAvailability(params) {
   
   // Determine which day's slots to use
   let slots = [];
-  if (preferred_date === 'today' || preferred_date === 'today\'s') {
+  if (preferred_date === 'today' || preferred_date === "today's") {
     slots = AVAILABLE_SLOTS.today;
   } else if (preferred_date === 'tomorrow') {
     slots = AVAILABLE_SLOTS.tomorrow;
   } else {
-    // Default to today if unclear
     slots = AVAILABLE_SLOTS.today;
   }
   
@@ -72,9 +71,7 @@ function handleCheckAvailability(params) {
   
   // Format response for Sophie to read naturally
   if (slots.length === 0) {
-    return {
-      result: "I don't have any available slots for that time. Would you like to try a different time or day?"
-    };
+    return "I don't have any available slots for that time. Would you like to try a different time or day?";
   }
   
   // Create a natural-sounding list of available times
@@ -85,9 +82,7 @@ function handleCheckAvailability(params) {
     return `${s.time} with ${s.provider}`;
   }).join(', ');
   
-  return {
-    result: `I have ${timesList}. Which time works best for you?`
-  };
+  return `I have ${timesList}. Which time works best for you?`;
 }
 
 function handleBookAppointment(params) {
@@ -102,7 +97,6 @@ function handleBookAppointment(params) {
     reason_for_visit 
   } = params;
   
-  // Store the booking
   const booking = {
     id: `APT-${Date.now()}`,
     time: selected_time,
@@ -115,23 +109,17 @@ function handleBookAppointment(params) {
   };
   
   bookedAppointments.push(booking);
-  
   console.log('📋 Appointment booked:', booking);
   
-  return {
-    result: `Perfect! I've scheduled ${child_name} for ${selected_time} with ${selected_provider}. You'll receive a text confirmation at ${phone_number}. Is there anything else I can help you with?`
-  };
+  return `Perfect! I've scheduled ${child_name} for ${selected_time} with ${selected_provider}. You'll receive a text confirmation at ${phone_number}. Is there anything else I can help you with?`;
 }
 
 function handleFlagUrgent(params) {
   console.log('🚨 URGENT FLAG:', params);
   
-  const { child_name, symptoms, parent_phone } = params;
+  const { child_name } = params;
   
-  // In a real system, this would trigger an immediate notification to clinical staff
-  return {
-    result: `I understand this is urgent. Based on what you've described, I'm going to connect you with our nurse line right away to make sure ${child_name} gets the care they need. Please hold for just a moment.`
-  };
+  return `I understand this is urgent. Based on what you've described, I'm going to connect you with our nurse line right away to make sure ${child_name} gets the care they need. Please hold for just a moment.`;
 }
 
 // ============================================
@@ -142,55 +130,64 @@ app.post('/vapi-webhook', async (req, res) => {
   try {
     console.log('\n========== VAPI WEBHOOK CALLED ==========');
     console.log('Time:', new Date().toISOString());
+    console.log('Full request body:', JSON.stringify(req.body, null, 2));
     
     const { message } = req.body;
     
-    // Check if this is a function call
-    if (message?.type === 'function-call') {
-      const functionName = message.functionCall?.name;
-      const parameters = message.functionCall?.parameters || {};
+    // CRITICAL: Vapi uses 'tool-calls' type, not 'function-call'
+    if (message?.type === 'tool-calls') {
+      const toolCall = message.toolCallList[0];
+      const functionName = toolCall.function.name;
+      const parameters = toolCall.function.arguments;
       
+      console.log('Tool Call ID:', toolCall.id);
       console.log('Function:', functionName);
       console.log('Parameters:', JSON.stringify(parameters, null, 2));
       
-      let result;
+      let resultString = "";
       
       // Route to the appropriate handler
       switch (functionName) {
         case 'check_availability':
-          result = handleCheckAvailability(parameters);
+          resultString = handleCheckAvailability(parameters);
           break;
           
         case 'book_appointment':
-          result = handleBookAppointment(parameters);
+          resultString = handleBookAppointment(parameters);
           break;
           
         case 'flag_urgent':
-          result = handleFlagUrgent(parameters);
+          resultString = handleFlagUrgent(parameters);
           break;
           
         default:
           console.log('❌ Unknown function:', functionName);
-          result = {
-            result: "I apologize, but I'm having trouble processing that request. Let me connect you with someone who can help."
-          };
+          resultString = "I apologize, but I'm having trouble processing that request. Let me connect you with someone who can help.";
       }
       
-      console.log('Response:', JSON.stringify(result, null, 2));
+      // CRITICAL: Vapi expects results array with toolCallId
+      const response = {
+        results: [{
+          toolCallId: toolCall.id,
+          result: resultString
+        }]
+      };
+      
+      console.log('Response:', JSON.stringify(response, null, 2));
       console.log('=========================================\n');
       
-      // CRITICAL: Return the result in the exact format Vapi expects
-      return res.status(200).json(result);
+      return res.status(200).json(response);
     }
     
-    // For non-function-call messages, just acknowledge
-    console.log('Non-function message type:', message?.type);
+    // For non-tool-call messages, just acknowledge
+    console.log('Non-tool-call message type:', message?.type);
     return res.status(200).json({ status: 'ok' });
     
   } catch (error) {
     console.error('❌ ERROR:', error);
+    console.error('Stack:', error.stack);
     return res.status(500).json({ 
-      result: "I'm sorry, I encountered an error. Let me transfer you to our front desk." 
+      error: "Internal server error" 
     });
   }
 });
